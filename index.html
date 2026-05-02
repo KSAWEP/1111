@@ -26,8 +26,34 @@
     --txt:#a8c4dc;           /* رمادي أزرق فاتح */
 }
 *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
-html,body{font-family:'Tajawal',sans-serif;overflow:hidden;height:100%;background:var(--navy);color:var(--w-soft);-webkit-font-smoothing:antialiased}
-img{max-width:100%}
+html,body{
+    font-family:'Tajawal',sans-serif;
+    overflow:hidden;
+    height:100%;
+    background:var(--navy);
+    color:var(--w-soft);
+    -webkit-font-smoothing:antialiased;
+    /* منع السحب لتحديث الصفحة في الجوال */
+    overscroll-behavior:none;
+    -webkit-overflow-scrolling:touch;
+    /* منع التحديد الطويل اللي يفتح القائمة في الجوال */
+    -webkit-touch-callout:none;
+    -webkit-user-select:none;
+    user-select:none;
+    /* تثبيت موقع الجسم */
+    position:fixed;
+    width:100%;
+    top:0;left:0;
+    /* منع التكبير */
+    touch-action:pan-y;
+}
+/* السماح بتحديد النصوص في الفورم والمحتوى */
+input,textarea,select,p,h1,h2,h3,h4{
+    -webkit-user-select:text;
+    user-select:text;
+    -webkit-touch-callout:default;
+}
+img{max-width:100%;-webkit-user-drag:none}
 
 /* ============ LIQUID GLASS SYSTEM ============ */
 .lg-card{
@@ -109,7 +135,17 @@ img{max-width:100%}
 .pps.above{transform:translateY(-100vh);opacity:0.4}
 .pps.active{transform:translateY(0);opacity:1}
 .pps.below{transform:translateY(100vh);opacity:0.4}
-.pps-inner{width:100%;height:100vh;overflow-y:auto;overflow-x:hidden;-webkit-overflow-scrolling:touch}
+.pps-inner{
+    width:100%;
+    height:100vh;
+    overflow-y:auto;
+    overflow-x:hidden;
+    -webkit-overflow-scrolling:touch;
+    /* مهم: منع السحب لتجاوز حدود السكرول */
+    overscroll-behavior:contain;
+    /* السماح فقط بالسكرول العمودي */
+    touch-action:pan-y;
+}
 .pps-inner::-webkit-scrollbar{width:5px}
 .pps-inner::-webkit-scrollbar-track{background:transparent}
 .pps-inner::-webkit-scrollbar-thumb{background:rgba(91,192,235,0.3);border-radius:3px}
@@ -495,7 +531,19 @@ img{max-width:100%}
 }
 
 /* قائمة الموبايل المنبثقة */
-.mob{position:fixed;inset:0;z-index:2000;display:none;padding:0;overflow-y:auto;background:linear-gradient(180deg,rgba(10,38,71,0.98) 0%,rgba(14,49,88,0.98) 100%);backdrop-filter:blur(24px)}
+.mob{
+    position:fixed;
+    inset:0;
+    z-index:2000;
+    display:none;
+    padding:0;
+    overflow-y:auto;
+    background:linear-gradient(180deg,rgba(10,38,71,0.98) 0%,rgba(14,49,88,0.98) 100%);
+    backdrop-filter:blur(24px);
+    -webkit-overflow-scrolling:touch;
+    overscroll-behavior:contain;
+    touch-action:pan-y;
+}
 .mob.open{display:flex;flex-direction:column;animation:fi .3s}
 .mob-hd{display:flex;justify-content:space-between;align-items:center;padding:20px;border-bottom:1px solid rgba(255,255,255,0.08)}
 .mob-hd img{height:38px;filter:brightness(0) invert(1)}
@@ -866,7 +914,7 @@ img{max-width:100%}
 (function(){
 const S=document.querySelectorAll('.pps'),D=document.querySelectorAll('.pdot'),T=S.length;
 const NAVS=document.querySelectorAll('.mnav a'),MOBS=document.querySelectorAll('.mob a');
-let c=0,a=false;
+let c=0,a=false,lockTimer=null;
 
 function go(i){
     if(a||i===c||i<0||i>=T)return;
@@ -881,7 +929,10 @@ function go(i){
     S[c].querySelectorAll('.an').forEach(e=>{e.style.animation='none';e.offsetHeight;e.style.animation='';});
     const inner=S[c].querySelector('.pps-inner');
     if(inner)inner.scrollTop=0;
-    setTimeout(()=>a=false,900);
+    
+    // إعادة ضبط القفل بشكل آمن - لو حصل خطأ ما يعلق
+    if(lockTimer)clearTimeout(lockTimer);
+    lockTimer=setTimeout(()=>{a=false;lockTimer=null;},950);
 }
 window.go=go;
 
@@ -921,21 +972,84 @@ document.addEventListener('wheel',function(e){
     }
 },{passive:false});
 
-let ty=0,touchInner=null;
-document.addEventListener('touchstart',function(e){
-    ty=e.touches[0].clientY;
-    touchInner=getInner(c);
+// ==================== نظام اللمس المحسّن ====================
+let touchStartY=0, touchStartTime=0, touchInner=null, touchMoved=false, touchHandled=false;
+const TOUCH_THRESHOLD=40;     // المسافة المطلوبة للانتقال
+const SWIPE_VELOCITY=0.3;     // سرعة السحب السريع (px/ms)
+const TOUCH_TIMEOUT=600;      // وقت السحب الأقصى
+
+function shouldScrollInside(inner, dir){
+    if(!inner) return false;
+    if(inner.scrollHeight <= inner.clientHeight + 10) return false;
+    const atBottom = Math.abs(inner.scrollHeight - inner.scrollTop - inner.clientHeight) < 5;
+    const atTop = inner.scrollTop < 5;
+    if(dir > 0 && atBottom) return false;  // لازم ينتقل
+    if(dir < 0 && atTop) return false;     // لازم ينتقل
+    return true;  // يكمّل سكرول داخلي
+}
+
+document.addEventListener('touchstart', function(e){
+    if(a) return; // إذا في انتقال جاري
+    touchStartY = e.touches[0].clientY;
+    touchStartTime = Date.now();
+    touchInner = getInner(c);
+    touchMoved = false;
+    touchHandled = false;
 },{passive:true});
-document.addEventListener('touchend',function(e){
-    const diff=ty-e.changedTouches[0].clientY;
-    if(Math.abs(diff)<50)return;
-    const dir=diff>0?1:-1;
-    if(touchInner && touchInner.scrollHeight>touchInner.clientHeight+10){
-        const atEnd=(dir>0&&isAtBottom(touchInner))||(dir<0&&isAtTop(touchInner));
-        if(!atEnd)return;
+
+document.addEventListener('touchmove', function(e){
+    if(a || touchHandled) return;
+    const currentY = e.touches[0].clientY;
+    const diff = touchStartY - currentY;
+    
+    // ما تحرك بعد الكفاية
+    if(Math.abs(diff) < 5) return;
+    touchMoved = true;
+    
+    const dir = diff > 0 ? 1 : -1;
+    
+    // إذا في محتوى قابل للسكرول داخلي - خله يسكرول طبيعي
+    if(shouldScrollInside(touchInner, dir)){
+        return;
     }
-    go(c+dir);
+    
+    // وصلنا حافة القسم - منع السكرول الافتراضي
+    if(e.cancelable){
+        e.preventDefault();
+    }
+    
+    // إذا تحرّك مسافة كافية - نفّذ الانتقال فوراً
+    if(Math.abs(diff) >= TOUCH_THRESHOLD){
+        touchHandled = true;
+        go(c + dir);
+    }
+},{passive:false});
+
+document.addEventListener('touchend', function(e){
+    if(a || touchHandled || !touchMoved) return;
+    
+    const endY = e.changedTouches[0].clientY;
+    const diff = touchStartY - endY;
+    const elapsed = Date.now() - touchStartTime;
+    const velocity = Math.abs(diff) / elapsed;
+    const dir = diff > 0 ? 1 : -1;
+    
+    // إذا في محتوى داخلي قابل للسكرول
+    if(shouldScrollInside(touchInner, dir)) return;
+    
+    // قبول السحب إذا:
+    // 1. مسافة كافية (40px+)
+    // 2. أو سحب سريع (swipe) حتى لو مسافة قصيرة
+    if(Math.abs(diff) >= TOUCH_THRESHOLD || (velocity > SWIPE_VELOCITY && Math.abs(diff) > 15)){
+        touchHandled = true;
+        go(c + dir);
+    }
 },{passive:true});
+
+// منع السكرول المطاطي (bounce) في iOS
+document.addEventListener('touchmove', function(e){
+    if(a) e.preventDefault();
+},{passive:false});
 
 document.addEventListener('keydown',function(e){
     if(e.key==='ArrowDown'||e.key==='PageDown'){
